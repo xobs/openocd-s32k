@@ -1679,27 +1679,35 @@ static int kinetis_make_ram_ready(struct target *target)
 	uint8_t ftfx_fcnfg;
 
 	/* check if ram ready */
+	LOG_INFO("Reading from address 0x%08x", FTFx_FCNFG);
 	result = target_read_u8(target, FTFx_FCNFG, &ftfx_fcnfg);
-	if (result != ERROR_OK)
+	LOG_INFO("Reading result: %d", result);
+	if (result != ERROR_OK) {
 		return result;
+	}
 
 	if (ftfx_fcnfg & (1 << 1))
 		return ERROR_OK;	/* ram ready */
 
 	/* make flex ram available */
+	LOG_INFO("Setting flexram thingy");
 	result = kinetis_ftfx_command(target, FTFx_CMD_SETFLEXRAM, 0x00ff0000,
 				 0, 0, 0, 0,  0, 0, 0, 0,  NULL);
+	LOG_INFO("Setting flexram thingy result: %d", result);
 	if (result != ERROR_OK)
 		return ERROR_FLASH_OPERATION_FAILED;
 
 	/* check again */
+	LOG_INFO("Reading from address 0x%08x again", FTFx_FCNFG);
 	result = target_read_u8(target, FTFx_FCNFG, &ftfx_fcnfg);
+	LOG_INFO("Reading result: %d", result);
 	if (result != ERROR_OK)
 		return result;
 
 	if (ftfx_fcnfg & (1 << 1))
 		return ERROR_OK;	/* ram ready */
 
+	LOG_INFO("KMRR: Failed");
 	return ERROR_FLASH_OPERATION_FAILED;
 }
 
@@ -2065,22 +2073,37 @@ static int kinetis_probe_chip(struct kinetis_chip *k_chip)
 	}
 
 	LOG_INFO("MCU is SDID 0x%08" PRIx32, k_chip->sim_sdid);
-	if (k_chip->sim_sdid == 0x118f03e0) {
-		/* 2048 bytes for non-interleved (<=256 kB) */
-		k_chip->pflash_size = 262144;
-		k_chip->pflash_sector_size = 2<<10;
-		k_chip->num_pflash_blocks = 1;
+	if ((k_chip->sim_sdid == 0x118f03e0) || (k_chip->sim_sdid == 0x148f06fa)) {
+		if (k_chip->sim_sdid == 0x118f03e0) {
+			/* 2048 bytes for non-interleaved (<=256 kB) */
+			k_chip->pflash_size = 262144;
+			k_chip->pflash_sector_size = 2<<10;
+			k_chip->num_pflash_blocks = 1;
 
-		/* 2048 bytes for non-interleved (<=2 MB) */
-		k_chip->nvm_size = 32768;
-		k_chip->nvm_sector_size = 2<<10;
-		k_chip->num_nvm_blocks = 1;
-		/*
-		k_chip->nvm_size = 0;
-		k_chip->nvm_sector_size = 2<<10;
-		k_chip->num_nvm_blocks = 0;
-		*/
-		k_chip->max_flash_prog_size = 512;
+			/* 2048 bytes for non-interleaved (<=2 MB) */
+			k_chip->nvm_size = 32768;
+			k_chip->nvm_sector_size = 2<<10;
+			k_chip->num_nvm_blocks = 1;
+
+			/* Non-interleaved */
+			k_chip->max_flash_prog_size = 512;
+			cpu_mhz = 48;
+		}
+		else if (k_chip->sim_sdid == 0x148f06fa) {
+			/* 4096 bytes for non-interleaved (>256 kB) */
+			k_chip->pflash_size = 1572864;
+			k_chip->pflash_sector_size = 4096;
+			k_chip->num_pflash_blocks = 3;
+
+			/* 4096 bytes for non-interleaved (<=2 MB) */
+			k_chip->nvm_size = 524288;
+			k_chip->nvm_sector_size = 4096;
+			k_chip->num_nvm_blocks = 1;
+
+			/* Interleaved */
+			k_chip->max_flash_prog_size = 1024;
+			cpu_mhz = 112;
+		}
 
 		/* Read the DEPART value */
 		result = target_read_u32(target, k_chip->sim_base + SIM_FCFG1_OFFSET, &k_chip->sim_fcfg1);
@@ -2097,7 +2120,6 @@ static int kinetis_probe_chip(struct kinetis_chip *k_chip)
 		k_chip->cache_type = KINETIS_CACHE_L;
 		k_chip->watchdog_type = KINETIS_WDOG_K;
 
-		cpu_mhz = 48;
 		snprintf(name, sizeof(name), "S32K%u%uZ%%s%u",
 			 familyid, subfamid, cpu_mhz / 10);
 
