@@ -2073,16 +2073,31 @@ static int kinetis_probe_chip(struct kinetis_chip *k_chip)
 	}
 
 	LOG_INFO("MCU is SDID 0x%08" PRIx32, k_chip->sim_sdid);
+		/* Read the DEPART value */
+		result = target_read_u32(target, k_chip->sim_base + SIM_FCFG1_OFFSET, &k_chip->sim_fcfg1);
+		if (result != ERROR_OK)
+			return result;
+		fcfg1_depart = (uint8_t)((k_chip->sim_fcfg1 >> 12) & 0x0f);
+		switch (fcfg1_depart) {
+			//case 0: k_chip->dflash_size = 32; break;
+			default: k_chip->dflash_size = 0; break;
+		}
+
+		num_blocks = 1;
+		k_chip->flash_support = FS_PROGRAM_SECTOR;
+		k_chip->cache_type = KINETIS_CACHE_L;
+		k_chip->watchdog_type = KINETIS_WDOG_K;
+
 	if ((k_chip->sim_sdid == 0x118f03e0) || (k_chip->sim_sdid == 0x148f06fa)) {
 		if (k_chip->sim_sdid == 0x118f03e0) {
 			/* 2048 bytes for non-interleaved (<=256 kB) */
 			k_chip->pflash_size = 262144;
-			k_chip->pflash_sector_size = 2<<10;
+			k_chip->pflash_sector_size = 2048;
 			k_chip->num_pflash_blocks = 1;
 
 			/* 2048 bytes for non-interleaved (<=2 MB) */
 			k_chip->nvm_size = 32768;
-			k_chip->nvm_sector_size = 2<<10;
+			k_chip->nvm_sector_size = 2048;
 			k_chip->num_nvm_blocks = 1;
 
 			/* Non-interleaved */
@@ -2103,22 +2118,9 @@ static int kinetis_probe_chip(struct kinetis_chip *k_chip)
 			/* Interleaved */
 			k_chip->max_flash_prog_size = 1024;
 			cpu_mhz = 112;
-		}
 
-		/* Read the DEPART value */
-		result = target_read_u32(target, k_chip->sim_base + SIM_FCFG1_OFFSET, &k_chip->sim_fcfg1);
-		if (result != ERROR_OK)
-			return result;
-		fcfg1_depart = (uint8_t)((k_chip->sim_fcfg1 >> 12) & 0x0f);
-		switch (fcfg1_depart) {
-			//case 0: k_chip->dflash_size = 32; break;
-			default: k_chip->dflash_size = 0; break;
+			k_chip->cache_type = KINETIS_CACHE_MSCM;
 		}
-
-		num_blocks = 1;
-		k_chip->flash_support = FS_PROGRAM_SECTOR;
-		k_chip->cache_type = KINETIS_CACHE_L;
-		k_chip->watchdog_type = KINETIS_WDOG_K;
 
 		snprintf(name, sizeof(name), "S32K%u%uZ%%s%u",
 			 familyid, subfamid, cpu_mhz / 10);
