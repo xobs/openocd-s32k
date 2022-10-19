@@ -1679,27 +1679,35 @@ static int kinetis_make_ram_ready(struct target *target)
 	uint8_t ftfx_fcnfg;
 
 	/* check if ram ready */
+	LOG_INFO("Reading from address 0x%08x", FTFx_FCNFG);
 	result = target_read_u8(target, FTFx_FCNFG, &ftfx_fcnfg);
-	if (result != ERROR_OK)
+	LOG_INFO("Reading result: %d", result);
+	if (result != ERROR_OK) {
 		return result;
+	}
 
 	if (ftfx_fcnfg & (1 << 1))
 		return ERROR_OK;	/* ram ready */
 
 	/* make flex ram available */
+	LOG_INFO("Setting flexram thingy");
 	result = kinetis_ftfx_command(target, FTFx_CMD_SETFLEXRAM, 0x00ff0000,
 				 0, 0, 0, 0,  0, 0, 0, 0,  NULL);
+	LOG_INFO("Setting flexram thingy result: %d", result);
 	if (result != ERROR_OK)
 		return ERROR_FLASH_OPERATION_FAILED;
 
 	/* check again */
+	LOG_INFO("Reading from address 0x%08x again", FTFx_FCNFG);
 	result = target_read_u8(target, FTFx_FCNFG, &ftfx_fcnfg);
+	LOG_INFO("Reading result: %d", result);
 	if (result != ERROR_OK)
 		return result;
 
 	if (ftfx_fcnfg & (1 << 1))
 		return ERROR_OK;	/* ram ready */
 
+	LOG_INFO("KMRR: Failed");
 	return ERROR_FLASH_OPERATION_FAILED;
 }
 
@@ -1719,6 +1727,7 @@ static int kinetis_write_sections(struct flash_bank *bank, const uint8_t *buffer
 	 */
 	uint32_t prog_section_chunk_bytes = k_bank->sector_size >> 8;
 	uint32_t prog_size_bytes = k_chip->max_flash_prog_size;
+	LOG_INFO("sector size: %" PRIu32", chunk_bytes: %" PRIu32, k_bank->sector_size, prog_section_chunk_bytes);
 
 	while (count > 0) {
 		uint32_t size = prog_size_bytes - offset % prog_size_bytes;
@@ -1749,14 +1758,14 @@ static int kinetis_write_sections(struct flash_bank *bank, const uint8_t *buffer
 			result = target_write_memory(bank->target, k_chip->progr_accel_ram,
 						4, size_aligned / 4, buffer_aligned);
 
-			LOG_DEBUG("section @ " TARGET_ADDR_FMT " aligned begin %" PRIu32
+			LOG_INFO("section @ " TARGET_ADDR_FMT " aligned begin %" PRIu32
 					", end %" PRIu32,
 					bank->base + offset, align_begin, align_end);
 		} else
 			result = target_write_memory(bank->target, k_chip->progr_accel_ram,
 						4, size_aligned / 4, buffer);
 
-		LOG_DEBUG("write section @ " TARGET_ADDR_FMT " with length %" PRIu32
+		LOG_INFO("write section @ " TARGET_ADDR_FMT " with length %" PRIu32
 				" bytes",
 			  bank->base + offset, size);
 
@@ -1869,6 +1878,7 @@ static int kinetis_write_inner(struct flash_bank *bank, const uint8_t *buffer,
 
 				LOG_DEBUG("write longword @ %08" PRIx32, (uint32_t)(bank->base + offset));
 
+				assert(0);
 				result = kinetis_ftfx_command(bank->target, FTFx_CMD_LWORDPROG, k_bank->prog_base + offset,
 						buffer[3], buffer[2], buffer[1], buffer[0],
 						0, 0, 0, 0,  &ftfx_fstat);
@@ -2056,10 +2066,93 @@ static int kinetis_probe_chip(struct kinetis_chip *k_chip)
 				k_chip->sim_base = SIM_BASE_KL28;
 		}
 	}
-	if (result != ERROR_OK)
+	if (result != ERROR_OK) {
+		LOG_ERROR("Unable to get result");
+		LOG_INFO("RESULT ERROR");
 		return result;
+	}
 
-	if ((k_chip->sim_sdid & (~KINETIS_SDID_K_SERIES_MASK)) == 0) {
+	LOG_INFO("MCU is SDID 0x%08" PRIx32, k_chip->sim_sdid);
+		/* Read the DEPART value */
+		result = target_read_u32(target, k_chip->sim_base + SIM_FCFG1_OFFSET, &k_chip->sim_fcfg1);
+		if (result != ERROR_OK)
+			return result;
+		fcfg1_depart = (uint8_t)((k_chip->sim_fcfg1 >> 12) & 0x0f);
+		switch (fcfg1_depart) {
+			//case 0: k_chip->dflash_size = 32; break;
+			default: k_chip->dflash_size = 0; break;
+		}
+
+		num_blocks = 1;
+		k_chip->flash_support = FS_PROGRAM_SECTOR;
+		k_chip->cache_type = KINETIS_CACHE_L;
+		k_chip->watchdog_type = KINETIS_WDOG_K;
+
+	if ((k_chip->sim_sdid == 0x118f03e0) || (k_chip->sim_sdid == 0x148f06fa)) {
+		if (k_chip->sim_sdid == 0x118f03e0) {
+			/* 2048 bytes for non-interleaved (<=256 kB) */
+			k_chip->pflash_size = 262144;
+			k_chip->pflash_sector_size = 2048;
+			k_chip->num_pflash_blocks = 1;
+
+			/* 2048 bytes for non-interleaved (<=2 MB) */
+			k_chip->nvm_size = 32768;
+			k_chip->nvm_sector_size = 2048;
+			k_chip->num_nvm_blocks = 1;
+
+			/* Non-interleaved */
+			k_chip->max_flash_prog_size = 512;
+			cpu_mhz = 48;
+		}
+		else if (k_chip->sim_sdid == 0x148f06fa) {
+			/* 4096 bytes for non-interleaved (>256 kB) */
+			k_chip->pflash_size = 1572864;
+			k_chip->pflash_sector_size = 4096;
+			k_chip->num_pflash_blocks = 3;
+
+			/* 4096 bytes for non-interleaved (<=2 MB) */
+			k_chip->nvm_size = 524288;
+			k_chip->nvm_sector_size = 4096;
+			k_chip->num_nvm_blocks = 1;
+
+			/* Interleaved */
+			k_chip->max_flash_prog_size = 1024;
+			cpu_mhz = 112;
+
+			k_chip->cache_type = KINETIS_CACHE_MSCM;
+		}
+
+		snprintf(name, sizeof(name), "S32K%u%uZ%%s%u",
+			 familyid, subfamid, cpu_mhz / 10);
+
+		nvm_marking[0] = k_chip->num_nvm_blocks ? 'X' : 'N';
+		nvm_marking[1] = '\0';
+
+		pflash_size_k = k_chip->pflash_size / 1024;
+		pflash_size_m = pflash_size_k / 1024;
+		if (pflash_size_m)
+			snprintf(flash_marking, sizeof(flash_marking), "%s%" PRIu32 "M0xxx", nvm_marking, pflash_size_m);
+		else
+			snprintf(flash_marking, sizeof(flash_marking), "%s%" PRIu32 "xxx", nvm_marking, pflash_size_k);
+
+		snprintf(k_chip->name, sizeof(k_chip->name), name, flash_marking);
+		LOG_INFO("Kinetis %s detected: %u flash blocks", k_chip->name, num_blocks);
+		LOG_INFO("%u PFlash banks: %" PRIu32 "k total", k_chip->num_pflash_blocks, pflash_size_k);
+		if (k_chip->num_nvm_blocks) {
+			nvm_size_k = k_chip->nvm_size / 1024;
+			dflash_size_k = k_chip->dflash_size / 1024;
+			LOG_INFO("%u FlexNVM banks: %" PRIu32 "k total, %" PRIu32 "k available as data flash, %" PRIu32 "bytes FlexRAM",
+				 k_chip->num_nvm_blocks, nvm_size_k, dflash_size_k, ee_size);
+		}
+		LOG_INFO("%u flash banks", k_chip->num_banks);
+
+		k_chip->probed = true;
+
+		kinetis_create_missing_banks(k_chip);
+		return ERROR_OK;
+	}
+
+	else if ((k_chip->sim_sdid & (~KINETIS_SDID_K_SERIES_MASK)) == 0) {
 		/* older K-series MCU */
 		uint32_t mcu_type = k_chip->sim_sdid & KINETIS_K_SDID_TYPE_MASK;
 		k_chip->cache_type = KINETIS_CACHE_K;
@@ -2674,11 +2767,14 @@ static int kinetis_probe(struct flash_bank *bank)
 	} else if (k_bank->bank_number < num_blocks) {
 		/* nvm, banks start at address 0x10000000 */
 		unsigned nvm_ord = k_bank->bank_number - first_nvm_bank;
-		uint32_t limit;
+//		uint32_t limit;
 
 		k_bank->flash_class = FC_FLEX_NVM;
 		bank->size = k_chip->nvm_size / k_chip->num_nvm_blocks;
 		bank->base = k_chip->nvm_base + bank->size * nvm_ord;
+		LOG_INFO(">>>NVM: nvm_ord: %d (k_bank->bank_number %u - first_nvm_bank %u)", nvm_ord, k_bank->bank_number, first_nvm_bank);
+		LOG_INFO(">>>NVM: k_chip->nvm_size: %u  k_chip->num_nvm_blocks: %u", k_chip->nvm_size, k_chip->num_nvm_blocks);
+		LOG_INFO(">>>NVM: bank->size: %u  bank->base: %08x", bank->size, (unsigned int)bank->base);
 		k_bank->prog_base = 0x00800000 + bank->size * nvm_ord;
 		k_bank->sector_size = k_chip->nvm_sector_size;
 		if (k_chip->dflash_size == 0) {
@@ -2696,6 +2792,7 @@ static int kinetis_probe(struct flash_bank *bank)
 		k_bank->protection_block = bank->num_prot_blocks * nvm_ord;
 
 		/* EEPROM backup part of FlexNVM is not accessible, use dflash_size as a limit */
+#if 0
 		if (k_chip->dflash_size > bank->size * nvm_ord)
 			limit = k_chip->dflash_size - bank->size * nvm_ord;
 		else
@@ -2703,12 +2800,13 @@ static int kinetis_probe(struct flash_bank *bank)
 
 		if (bank->size > limit) {
 			bank->size = limit;
-			LOG_DEBUG("FlexNVM bank %u limited to 0x%08" PRIx32 " due to active EEPROM backup",
+			LOG_INFO("FlexNVM bank %u limited to 0x%08" PRIx32 " due to active EEPROM backup",
 				k_bank->bank_number, limit);
 		}
+#endif
 
 		size_k = bank->size / 1024;
-		LOG_DEBUG("Kinetis bank %u: %" PRIu32 "k FlexNVM, FTFx base 0x%08" PRIx32 ", sect %" PRIu32,
+		LOG_INFO("Kinetis bank %u: %" PRIu32 "k FlexNVM, FTFx base 0x%08" PRIx32 ", sect %" PRIu32,
 			 k_bank->bank_number, size_k, k_bank->prog_base, k_bank->sector_size);
 
 	} else {
@@ -2748,6 +2846,7 @@ static int kinetis_probe(struct flash_bank *bank)
 	}
 
 	bank->num_sectors = bank->size / k_bank->sector_size;
+	LOG_INFO(">>>>>> bank->num_sectors: %d  bank->size: %u  bank->sector_size: %u", bank->num_sectors, bank->size, k_bank->sector_size);
 
 	if (bank->num_sectors > 0) {
 		/* FlexNVM bank can be used for EEPROM backup therefore zero sized */
